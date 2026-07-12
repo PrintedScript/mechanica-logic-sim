@@ -1,0 +1,252 @@
+:root {
+  --bg: #14171c;
+  --panel: #1c2128;
+  --panel2: #22282f;
+  --border: #333a44;
+  --text: #d8dee6;
+  --muted: #7d8794;
+  --accent: #4da3ff;
+  --green: #3ecf6f;
+  --red: #ff5d5d;
+  --wire: #8fa1b5;
+  --wire-on: #3ecf6f;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  display: flex; flex-direction: column; overflow: hidden;
+  user-select: none;
+}
+
+/* ---------- toolbar ---------- */
+#toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; background: var(--panel);
+  border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+#logo { font-weight: 600; margin-right: 12px; }
+.spacer { flex: 1; }
+button, select {
+  background: var(--panel2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 5px;
+  padding: 5px 12px; cursor: pointer; font: inherit;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: #1d4ed8; border-color: #2f63e8; }
+button.primary.running { background: #b45309; border-color: #d97706; }
+button.danger:hover { border-color: var(--red); color: var(--red); }
+#sim-time { color: var(--muted); min-width: 60px; font-variant-numeric: tabular-nums; }
+#speed-label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+#speed-label select { padding: 4px 6px; }
+button#btn-pause.paused { background: #14532d; border-color: #16a34a; }
+button#btn-snap.on { background: #14532d; border-color: #16a34a; }
+
+/* ---------- layout ---------- */
+#main { flex: 1; display: flex; min-height: 0; }
+#palette, #inspector {
+  width: 210px; flex: 0 0 auto; background: var(--panel);
+  overflow-y: auto; padding: 8px;
+}
+#palette { border-right: 1px solid var(--border); }
+#inspector { border-left: 1px solid var(--border); width: 240px; }
+.pal-title { font-weight: 600; margin: 2px 0 8px; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+.pal-cat { margin: 10px 0 4px; color: var(--accent); font-size: 12px; font-weight: 600; }
+.pal-item {
+  padding: 5px 8px; margin: 3px 0; background: var(--panel2);
+  border: 1px solid var(--border); border-radius: 5px; cursor: pointer;
+}
+.pal-item:hover { border-color: var(--accent); }
+.pal-item .tid { color: var(--muted); font-size: 11px; float: right; }
+.pal-hint { margin-top: 14px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.muted { color: var(--muted); }
+
+/* ---------- canvas ---------- */
+#canvas-wrap {
+  flex: 1; position: relative; overflow: hidden;
+  background: var(--bg);
+  background-image: radial-gradient(circle, #262c35 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+/* Brighter dots while snap-to-grid is on, so the lattice being snapped to is visible. */
+#canvas-wrap.snap-grid {
+  background-image: radial-gradient(circle, #3a4552 1.5px, transparent 1.5px);
+}
+#world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+#wires { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: visible; }
+#wires path.wire { fill: none; stroke: var(--wire); stroke-width: 2; }
+#wires path.wire.on { stroke: var(--wire-on); }
+#wires path.wire.selected {
+  stroke: var(--accent); stroke-width: 3;
+  stroke-dasharray: 9 7;
+  animation: wire-flow 0.45s linear infinite;
+}
+/* Paths are drawn from the source output to the destination input, so a
+   shrinking dash offset makes the dashes travel the way the data flows. */
+@keyframes wire-flow {
+  from { stroke-dashoffset: 16; }
+  to   { stroke-dashoffset: 0; }
+}
+#wires path.hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+#wires path.temp { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; pointer-events: none; }
+/* Colour-coded wires keep their own stroke (inline style); the "on" state
+   shows as a glow in the wire's colour instead of the green recolour. */
+#wires path.wire.colored.on {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+#wires circle.wire-handle {
+  fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: move;
+}
+#wires circle.wire-handle:hover { fill: var(--accent); }
+#canvas-status {
+  position: absolute; bottom: 8px; left: 10px; color: var(--muted);
+  font-size: 11px; pointer-events: none;
+}
+
+/* ---------- blocks ---------- */
+.block {
+  position: absolute; width: 180px;
+  background: var(--panel2); border: 1px solid var(--border);
+  border-radius: 7px; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.block.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(77,163,255,0.35); }
+.block.killed { border-color: var(--red); box-shadow: 0 0 0 2px rgba(255,93,93,0.4); }
+.block-head {
+  padding: 5px 8px; font-weight: 600; cursor: grab;
+  border-bottom: 1px solid var(--border); border-radius: 7px 7px 0 0;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.block-head .tid { color: rgba(255,255,255,0.55); font-weight: 400; font-size: 11px; }
+/* Custom-named blocks: the name is the title, the real block name a subtitle.
+   The fixed height must match HEAD_H_NAMED in editor.js (port anchor math). */
+.block-head.named { height: 41px; padding-top: 4px; padding-bottom: 4px; }
+.block-head .head-title {
+  display: flex; flex-direction: column; justify-content: center;
+  min-width: 0; margin-right: 6px;
+}
+.block-head .custom-name {
+  line-height: 17px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.block-head .type-sub {
+  font-weight: 400; font-size: 10px; line-height: 14px;
+  color: rgba(255,255,255,0.55);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.block-head .skull { color: var(--red); }
+.cat-Boolean .block-head { background: #2a3550; }
+.cat-Number  .block-head { background: #2d4437; }
+.cat-Input   .block-head { background: #4a3a22; }
+.cat-Misc    .block-head { background: #432d47; }
+.block-rows { position: relative; padding: 4px 0; }
+.port-row { height: 24px; display: flex; align-items: center; padding: 0 12px; color: var(--muted); font-size: 12px; }
+.port-row .in-label { flex: 0 0 auto; }
+.port-row .in-val {
+  margin-left: auto; padding-left: 6px; min-width: 0;
+  color: #ffd34d; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.port-row.out-row { justify-content: flex-end; color: var(--text); }
+.port {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--panel); border: 2px solid var(--wire); cursor: crosshair; z-index: 2;
+}
+.port:hover { border-color: var(--accent); background: var(--accent); }
+.port.in { left: -7px; }
+.port.out { right: -7px; border-color: var(--green); }
+.block-extra { padding: 4px 8px 6px; }
+.block-value {
+  text-align: center; font-variant-numeric: tabular-nums;
+  color: var(--green); font-size: 12px; min-height: 15px;
+}
+/* Constant gate's configured value, shown while editing (not live output). */
+.block-value.const-preview { color: var(--muted); }
+.light-swatch { height: 34px; border-radius: 4px; border: 1px solid var(--border); background: #000; }
+.numdisp {
+  min-height: 34px; border-radius: 4px; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.keycap {
+  display: inline-block; padding: 1px 8px; border: 1px solid var(--muted);
+  border-radius: 4px; background: var(--panel); font-size: 11px;
+}
+
+/* ---------- push button ---------- */
+.pushbtn {
+  display: block; width: 100%; padding: 8px 0; margin: 2px 0;
+  background: #503030; border: 1px solid #7d4a4a; border-radius: 6px;
+  box-shadow: 0 2px 0 #3a2020;
+  font-weight: 600; letter-spacing: 0.5px;
+}
+.pushbtn:hover:not(:disabled) { border-color: var(--red); }
+.pushbtn.held:not(:disabled) {
+  transform: translateY(2px); box-shadow: none;
+  background: #6b3535; border-color: var(--red);
+}
+.pushbtn.on { color: #b7ffce; border-color: var(--green); box-shadow: 0 2px 0 #3a2020, inset 0 0 6px rgba(62,207,111,0.55); }
+.pushbtn.on.held:not(:disabled) { box-shadow: inset 0 0 6px rgba(62,207,111,0.55); }
+
+/* ---------- note ---------- */
+.block.note { width: 220px; background: #33301f; border-color: #57512e; }
+.block.note .block-head { background: #514828; }
+.note-text {
+  white-space: pre-wrap; overflow-wrap: break-word;
+  color: #e8dfae; font-size: 12px; line-height: 1.45;
+  padding: 3px 2px 4px; min-height: 18px;
+}
+.note-text.empty { color: var(--muted); font-style: italic; }
+
+/* ---------- inspector ---------- */
+.insp-block-name { font-weight: 600; margin-bottom: 2px; }
+.insp-sub { color: var(--muted); font-size: 11px; margin-bottom: 10px; }
+.insp-field { margin-bottom: 10px; }
+.insp-field label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.insp-field input[type=number], .insp-field input[type=text], .insp-field select, .insp-field textarea {
+  width: 100%; background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; padding: 4px 6px; font: inherit;
+}
+.insp-field textarea { resize: vertical; min-height: 80px; }
+.insp-field input[type=range] { width: 100%; }
+.insp-field input[type=color] { width: 100%; height: 26px; padding: 0; border: 1px solid var(--border); background: none; }
+.insp-sim-title { margin: 14px 0 6px; color: var(--green); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+.insp-row { display: flex; align-items: center; gap: 6px; }
+.insp-del { margin-top: 14px; width: 100%; }
+
+/* ---------- wire colour swatches ---------- */
+.wire-swatches { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+.wire-swatch {
+  width: 20px; height: 20px; padding: 0;
+  border: 2px solid var(--border); border-radius: 50%; cursor: pointer;
+}
+.wire-swatch:hover { border-color: #fff; }
+.wire-swatch.active { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+.wire-swatch.none {
+  background: linear-gradient(135deg, var(--wire) 44%, var(--red) 44%, var(--red) 56%, var(--wire) 56%);
+}
+input.wire-swatch.custom { border-radius: 50%; background: none; }
+
+/* ---------- modal ---------- */
+#modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#modal-bg.hidden { display: none; }
+#modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  width: min(640px, 90vw); max-height: 85vh; display: flex; flex-direction: column;
+  padding: 14px;
+}
+#modal-title { font-weight: 600; font-size: 15px; margin-bottom: 10px; }
+#modal-body { overflow-y: auto; user-select: text; }
+#modal-body textarea {
+  width: 100%; height: 240px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 5px; padding: 8px;
+  font: 12px/1.4 Consolas, monospace; resize: vertical;
+}
+#modal-body h3 { color: var(--accent); font-size: 13px; margin: 12px 0 4px; }
+#modal-body p, #modal-body li { color: var(--text); font-size: 12.5px; }
+#modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

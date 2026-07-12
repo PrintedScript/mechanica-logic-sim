@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mechanica Logic Simulator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div id="toolbar">
+    <span id="logo">⚙ Mechanica Logic Sim</span>
+    <button id="btn-run" class="primary">▶ Run</button>
+    <button id="btn-pause" disabled>⏸ Pause</button>
+    <button id="btn-reset" disabled>⟲ Reset</button>
+    <label id="speed-label">Speed
+      <select id="sel-speed">
+        <option value="0.25">0.25×</option>
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+        <option value="4">4×</option>
+        <option value="10">10×</option>
+      </select>
+    </label>
+    <span id="sim-time" title="Simulation time">0.00s</span>
+    <span class="spacer"></span>
+    <button id="btn-snap" title="Snap blocks and wire corners to the grid while dragging">▦ Snap</button>
+    <button id="btn-tidy" title="Auto-route all wires neatly around blocks and other wires">⌗ Tidy wires</button>
+    <button id="btn-export">Export</button>
+    <button id="btn-import">Import</button>
+    <select id="sel-example">
+      <option value="">Examples…</option>
+      <option value="keylight">Key → Toggle → Light</option>
+      <option value="blinker">Blinker (NOT + Delay loop)</option>
+      <option value="counter">Counter (Memory + Add)</option>
+      <option value="rangefinder">Rangefinder (wireless echo)</option>
+    </select>
+    <button id="btn-clear" class="danger">Clear</button>
+    <button id="btn-help">?</button>
+  </div>
+
+  <div id="main">
+    <div id="palette">
+      <div class="pal-title">Blocks</div>
+      <div id="palette-list"></div>
+      <div class="pal-hint">Click a block to add it.<br>Drag block headers to move.<br>Drag port ⭘ to port ⭘ to
+        wire.<br>Drag a wire to bend in a corner;<br>double-click a corner dot to remove it.<br>Select a wire to colour
+        it in the Inspector.<br>“Tidy wires” auto-routes everything.<br>Click wire/block + Del to remove.<br>Drag empty
+        space to pan, wheel to zoom.</div>
+    </div>
+
+    <div id="canvas-wrap">
+      <div id="world">
+        <svg id="wires"></svg>
+        <div id="blocks-layer"></div>
+      </div>
+      <div id="canvas-status"></div>
+    </div>
+
+    <div id="inspector">
+      <div class="pal-title">Inspector</div>
+      <div id="inspector-body"><em class="muted">Nothing selected</em></div>
+    </div>
+  </div>
+
+  <div id="modal-bg" class="hidden">
+    <div id="modal">
+      <div id="modal-title"></div>
+      <div id="modal-body"></div>
+      <div id="modal-actions"></div>
+    </div>
+  </div>
+
+  <script src="blocks.js"></script>
+  <script src="engine.js"></script>
+  <script src="route.js"></script>
+  <script src="editor.js"></script>
+  <script src="build_examples.js"></script>
+  <script src="app.js"></script>
+</body>
+
+</html>
