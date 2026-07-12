@@ -1,6 +1,6 @@
 # Mechanica Logic Simulator
 
-<img src="imgs/preview.png"/>
+[<img src="imgs/preview.png"/>](https://printedscript.github.io/mechanica-logic-sim/src/index.html)
 
 > [!NOTE]
 > This project was made for fun to test the capabilities of Claude Fable 5
@@ -27,6 +27,9 @@ A web-based visual editor and simulator for designing and testing logic circuits
   - Rangefinder (wireless echo)
 
 ## Getting Started
+
+### Access from Github Pages
+[Click Here](https://printedscript.github.io/mechanica-logic-sim/src/index.html) to be redirected to the Github hosted page.
 
 ### Running Locally
 
