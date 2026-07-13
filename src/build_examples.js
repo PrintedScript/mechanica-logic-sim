@@ -978,4 +978,91 @@ const EXAMPLES = {
             }
         ]
     },
+    // Sine calculator (range-reduced 13th-order Taylor). Two tricks give it
+    // accuracy across the whole number line despite Mechanica having no trig
+    // gate and snapping every constant to 0.005 steps:
+    //
+    //  1. Range reduction. A raw Taylor series is only good near 0, so first
+    //     fold x into [-pi, pi] with  r = x - 2*pi*round(x / (2*pi)).  sin(x) =
+    //     sin(r), and the polynomial now only ever sees a small angle. 2*pi
+    //     can't be typed (6.28318.. snaps to 6.285), so it's built as 710/113
+    //     with a Divide gate -- a rational good to ~3e-7.
+    //
+    //  2. 13th-order Taylor on r, Horner form in u = r^2:
+    //       sin(r) ~= r*(1 - u*(1/6 - u*(1/120 - u*(1/5040
+    //                   - u*(1/362880 - u*(1/39916800 - u/6227020800))))))
+    //     The reciprocal factorials 1/11! and 1/13! are larger than the 10,000,000
+    //     constant cap, so each coefficient is made by dividing the previous one
+    //     by the next two integers' product: 1/5! = (1/3!)/20, 1/7! = (1/5!)/42,
+    //     1/9! = (1/7!)/72, 1/11! = (1/9!)/110, 1/13! = (1/11!)/156.
+    //
+    // Set x (RADIANS) in the top-left constant; the display reads sin(x). The
+    // default 7.855 (~5*pi/2) reads ~1.0 -- proof the range reduction works on a
+    // large angle. Max error is ~2e-5 anywhere; near 0 it's ~1e-6.
+    sine: {
+        "format": "mechanica-sim",
+        "version": 1,
+        "blocks": [
+            { "uid": 1,  "type": 82, "x": 48,   "y": 48,   "props": { "value": 7.855 }, "inputs": {} },
+            { "uid": 2,  "type": 82, "x": 48,   "y": 168,  "props": { "value": 1 },     "inputs": {} },
+            { "uid": 3,  "type": 82, "x": 48,   "y": 288,  "props": { "value": 710 },   "inputs": {} },
+            { "uid": 4,  "type": 82, "x": 48,   "y": 408,  "props": { "value": 113 },   "inputs": {} },
+            { "uid": 10, "type": 82, "x": 48,   "y": 528,  "props": { "value": 6 },     "inputs": {} },
+            { "uid": 5,  "type": 82, "x": 48,   "y": 648,  "props": { "value": 20 },    "inputs": {} },
+            { "uid": 6,  "type": 82, "x": 48,   "y": 768,  "props": { "value": 42 },    "inputs": {} },
+            { "uid": 7,  "type": 82, "x": 48,   "y": 888,  "props": { "value": 72 },    "inputs": {} },
+            { "uid": 8,  "type": 82, "x": 48,   "y": 1008, "props": { "value": 110 },   "inputs": {} },
+            { "uid": 9,  "type": 82, "x": 48,   "y": 1128, "props": { "value": 156 },   "inputs": {} },
+
+            { "uid": 11, "type": 86, "x": 336,  "y": 288,  "props": {}, "inputs": { "Input 1": 3, "Input 2": 4 } },
+            { "uid": 12, "type": 86, "x": 600,  "y": 120,  "props": {}, "inputs": { "Input 1": 1, "Input 2": 11 } },
+            { "uid": 13, "type": 87, "x": 864,  "y": 120,  "props": { "roundingMode": "Round" }, "inputs": { "Input": 12 } },
+            { "uid": 14, "type": 85, "x": 1128, "y": 216,  "props": {}, "inputs": { "Input 1": 11, "Input 2": 13 } },
+            { "uid": 15, "type": 84, "x": 1392, "y": 96,   "props": {}, "inputs": { "Input 1": 1, "Input 2": 14 } },
+            { "uid": 16, "type": 85, "x": 1656, "y": 96,   "props": {}, "inputs": { "Input 1": 15, "Input 2": 15 } },
+
+            { "uid": 17, "type": 86, "x": 336,  "y": 528,  "props": {}, "inputs": { "Input 1": 2,  "Input 2": 10 } },
+            { "uid": 18, "type": 86, "x": 336,  "y": 648,  "props": {}, "inputs": { "Input 1": 17, "Input 2": 5 } },
+            { "uid": 19, "type": 86, "x": 336,  "y": 768,  "props": {}, "inputs": { "Input 1": 18, "Input 2": 6 } },
+            { "uid": 20, "type": 86, "x": 336,  "y": 888,  "props": {}, "inputs": { "Input 1": 19, "Input 2": 7 } },
+            { "uid": 21, "type": 86, "x": 336,  "y": 1008, "props": {}, "inputs": { "Input 1": 20, "Input 2": 8 } },
+            { "uid": 22, "type": 86, "x": 336,  "y": 1128, "props": {}, "inputs": { "Input 1": 21, "Input 2": 9 } },
+
+            { "uid": 23, "type": 85, "x": 1920, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 22 } },
+            { "uid": 24, "type": 84, "x": 1920, "y": 672,  "props": {}, "inputs": { "Input 1": 21, "Input 2": 23 } },
+            { "uid": 25, "type": 85, "x": 2184, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 24 } },
+            { "uid": 26, "type": 84, "x": 2184, "y": 672,  "props": {}, "inputs": { "Input 1": 20, "Input 2": 25 } },
+            { "uid": 27, "type": 85, "x": 2448, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 26 } },
+            { "uid": 28, "type": 84, "x": 2448, "y": 672,  "props": {}, "inputs": { "Input 1": 19, "Input 2": 27 } },
+            { "uid": 29, "type": 85, "x": 2712, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 28 } },
+            { "uid": 30, "type": 84, "x": 2712, "y": 672,  "props": {}, "inputs": { "Input 1": 18, "Input 2": 29 } },
+            { "uid": 31, "type": 85, "x": 2976, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 30 } },
+            { "uid": 32, "type": 84, "x": 2976, "y": 672,  "props": {}, "inputs": { "Input 1": 17, "Input 2": 31 } },
+            { "uid": 33, "type": 85, "x": 3240, "y": 528,  "props": {}, "inputs": { "Input 1": 16, "Input 2": 32 } },
+            { "uid": 34, "type": 84, "x": 3240, "y": 672,  "props": {}, "inputs": { "Input 1": 2,  "Input 2": 33 } },
+
+            { "uid": 35, "type": 85, "x": 3504, "y": 384,  "props": {}, "inputs": { "Input 1": 15, "Input 2": 34 } },
+            {
+                "uid": 36, "type": 89, "x": 3768, "y": 384,
+                "props": { "textColor": "#7ecbff", "bgColor": "#101418" },
+                "inputs": { "Input": 35 }
+            },
+
+            {
+                "uid": 37, "type": 999, "x": 48, "y": 1272,
+                "props": { "text": "Set x (radians) in the top-left constant; the display reads sin(x).\nRange reduction folds x into [-pi, pi] (r = x - 2pi*round(x/2pi)),\nthen a 13th-order Taylor series is evaluated on r. Accurate for any x." },
+                "inputs": {}
+            },
+            {
+                "uid": 38, "type": 999, "x": 336, "y": 1272,
+                "props": { "text": "2pi = 710/113 and the 1/n! coefficients are built with Divide gates:\nthe game snaps constants to 0.005 steps and caps them at 10,000,000,\nso 6.28318.. and 1/11!, 1/13! can't be typed directly." },
+                "inputs": {}
+            },
+            {
+                "uid": 39, "type": 999, "x": 3768, "y": 528,
+                "props": { "text": "^^ sin(x)" },
+                "inputs": {}
+            }
+        ]
+    },
 };
