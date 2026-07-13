@@ -495,6 +495,7 @@ class Editor {
       extraEl.textContent = "Push";
       extraEl.disabled = !(this.getEngine && this.getEngine());
       extraEl.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return; // let middle/right-click fall through to pan
         e.preventDefault();
         extraEl.classList.add("held");
         const eng = this.getEngine ? this.getEngine() : null;
@@ -747,6 +748,8 @@ class Editor {
 
     // Middle-mouse should pan from anywhere on the canvas, even over a block.
     this.wrap.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });
+    // Right-click pans, so suppress the context menu over the canvas.
+    this.wrap.addEventListener("contextmenu", (e) => e.preventDefault());
 
     // Wires: drag a corner handle to move it, drag the wire itself to bend a
     // new corner into it, plain click to select.
@@ -783,9 +786,9 @@ class Editor {
     });
   }
 
-  // Middle button, or Space held with the left button: a pan, not a select.
+  // Middle button, right button, or Space held with the left button: pan.
   isPanGesture(e) {
-    return e.button === 1 || (e.button === 0 && this.spaceDown);
+    return e.button === 1 || e.button === 2 || (e.button === 0 && this.spaceDown);
   }
 
   startPan(e) {
@@ -923,7 +926,7 @@ class Editor {
   bindBlockEvents(root, blk) {
     const head = root.querySelector(".block-head");
     head.addEventListener("mousedown", (e) => {
-      if (this.isPanGesture(e)) { e.preventDefault(); this.startPan(e); return; }
+      if (this.isPanGesture(e)) { e.preventDefault(); e.stopPropagation(); this.startPan(e); return; }
       if (e.button !== 0) return;
       e.preventDefault();
       // Shift/Ctrl/⌘ toggles this block in the selection without dragging.
@@ -939,7 +942,9 @@ class Editor {
     });
 
     root.addEventListener("mousedown", (e) => {
-      if (this.isPanGesture(e)) return; // handled by wrap/startPan
+      // Pan gesture starting over a block body: pan from here (the head handler
+      // stops propagation for pans that start on the head, so no double-pan).
+      if (this.isPanGesture(e)) { e.preventDefault(); this.startPan(e); return; }
       const dot = e.target.closest ? e.target.closest(".port") : null;
       if (dot) { e.preventDefault(); e.stopPropagation(); this.startWireDrag(dot); return; }
       // Body click (not the head): select but don't drag, and respect modifiers.

@@ -510,7 +510,7 @@ document.getElementById("btn-help").addEventListener("click", () => {
       <li><b>Wire colours:</b> select a wire and pick a colour in the Inspector (presets or a custom colour). Coloured wires glow in their own colour when carrying a True value. Colours and corners are saved with the build.</li>
       <li><b>⌗ Tidy wires</b> auto-routes every wire at right angles, steering around blocks and keeping wires from riding on top of each other. It replaces existing corners (colours are kept) — you can still adjust any wire by hand afterwards.</li>
       <li><b>▦ Snap</b> toggles snap-to-grid: newly added blocks, dragged blocks and wire corners align to the ${GRID_SIZE}px dot grid, and ⌗ Tidy wires routes its corners on the grid too. Existing positions are untouched until you drag them. The setting is remembered in this browser.</li>
-      <li>Click a block or wire, then press <b>Delete</b> to remove it (Delete clears the whole selection at once). <b>Middle-drag</b> or hold <b>Space</b> and drag to pan; scroll to zoom.</li>
+      <li>Click a block or wire, then press <b>Delete</b> to remove it (Delete clears the whole selection at once). <b>Right-drag</b>, <b>middle-drag</b>, or hold <b>Space</b> and drag to pan; scroll to zoom.</li>
       <li><b>Note</b> blocks (marked "sim") are simulator-only sticky notes for documenting your build — select one and edit its text in the Inspector. They are ignored by the simulation.</li>
       <li>A selected wire animates in the direction the data travels (source → destination).</li>
       <li>Number properties snap to steps of <b>0.005</b> like in the game — typing 1.023 stores 1.025.</li>
