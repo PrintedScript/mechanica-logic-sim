@@ -85,7 +85,7 @@ requestAnimationFrame(frame);
 // ---------------- editor <-> engine bridge ----------------
 
 editor.onChange = (structural, uids) => {
-  saveLocal();
+  saveActiveBuild();
   if (running && engine && structural) engine.structureChanged(uids);
 };
 editor.onPropEdit = (uid) => {
@@ -254,17 +254,244 @@ document.getElementById("btn-clear").addEventListener("click", () => {
   }
 });
 
-function saveLocal() {
-  try { localStorage.setItem("mechanica-sim-build", JSON.stringify(editor.serialize())); } catch (_) {}
+// ---------------- workspace: tabbed editor sessions ----------------
+//
+// One Editor instance is shared by every tab (only one tab is visible at a
+// time). Each tab is a saved build slot in localStorage plus a name and a
+// remembered view (pan/zoom). The index tracks the tab order and which is
+// active; switching serializes the current tab, then loads the target.
+
+const WS_INDEX_KEY = "mechanica-sim-workspace";
+const WS_BUILD_PREFIX = "mechanica-sim-build:";
+const LEGACY_BUILD_KEY = "mechanica-sim-build"; // pre-tabs single build
+const MAX_TAB_NAME = 40;
+
+// { activeId, seq, tabs: [{ id, name }] }
+const workspace = { activeId: null, seq: 0, tabs: [] };
+
+const tabListEl = document.getElementById("tab-list");
+
+function buildKey(id) { return WS_BUILD_PREFIX + id; }
+
+function saveWorkspaceIndex() {
+  try { localStorage.setItem(WS_INDEX_KEY, JSON.stringify(workspace)); } catch (_) {}
 }
-(function restoreLocal() {
+
+// Persist the active tab's build (with its current view) into its slot. Called
+// on every editor change and before switching away / unloading.
+function saveActiveBuild() {
+  if (workspace.activeId == null) return;
   try {
-    const raw = localStorage.getItem("mechanica-sim-build");
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data.blocks && data.blocks.length) editor.load(data);
+    const data = editor.serialize();
+    data.view = { pan: { x: editor.pan.x, y: editor.pan.y }, zoom: editor.zoom };
+    localStorage.setItem(buildKey(workspace.activeId), JSON.stringify(data));
+  } catch (_) {}
+}
+
+// Load a tab's build into the shared editor and restore its view. A missing or
+// empty slot just clears the canvas. Sets activeId first so the load's onChange
+// autosaves into the right slot.
+function loadIntoEditor(id) {
+  workspace.activeId = id;
+  let data = null;
+  try {
+    const raw = localStorage.getItem(buildKey(id));
+    if (raw) data = JSON.parse(raw);
+  } catch (_) {}
+  if (data && Array.isArray(data.blocks) && data.blocks.length) {
+    try { editor.load(data); } catch (_) { editor.clear(); }
+  } else {
+    editor.clear();
+  }
+  // Restore the remembered view (fall back to the editor's defaults).
+  const view = data && data.view;
+  if (view && view.pan && typeof view.zoom === "number") {
+    editor.pan.x = Number(view.pan.x) || 0;
+    editor.pan.y = Number(view.pan.y) || 0;
+    editor.zoom = Math.min(2.5, Math.max(0.25, Number(view.zoom) || 1));
+    editor.applyTransform();
+  }
+}
+
+function findTab(id) { return workspace.tabs.find((t) => t.id === id); }
+
+// A unique "Untitled N" name for a fresh tab.
+function nextUntitledName() {
+  const used = new Set(workspace.tabs.map((t) => t.name));
+  let n = workspace.tabs.length + 1;
+  while (used.has("Untitled " + n)) n++;
+  return "Untitled " + n;
+}
+
+function switchTo(id) {
+  if (id === workspace.activeId) return;
+  if (!findTab(id)) return;
+  if (running) setRunning(false); // engine holds the model we're about to replace
+  saveActiveBuild();
+  loadIntoEditor(id);
+  saveWorkspaceIndex();
+  renderTabs();
+}
+
+function newTab() {
+  if (running) setRunning(false);
+  saveActiveBuild();
+  const id = "t" + (++workspace.seq);
+  workspace.tabs.push({ id, name: nextUntitledName() });
+  loadIntoEditor(id);   // clears the canvas for the blank tab
+  saveActiveBuild();     // create the (empty) slot
+  saveWorkspaceIndex();
+  renderTabs();
+}
+
+function tabIsEmpty(id) {
+  if (id === workspace.activeId) return editor.model.blocks.size === 0;
+  try {
+    const raw = localStorage.getItem(buildKey(id));
+    if (!raw) return true;
+    const data = JSON.parse(raw);
+    return !(data && Array.isArray(data.blocks) && data.blocks.length);
+  } catch (_) { return true; }
+}
+
+function closeTab(id) {
+  const tab = findTab(id);
+  if (!tab) return;
+  if (!tabIsEmpty(id) && !confirm(`Close "${tab.name}"? Its build will be discarded.`)) return;
+  const idx = workspace.tabs.findIndex((t) => t.id === id);
+  workspace.tabs.splice(idx, 1);
+  try { localStorage.removeItem(buildKey(id)); } catch (_) {}
+
+  if (workspace.tabs.length === 0) {
+    // Never leave the user with zero tabs: open a fresh blank one.
+    if (running) setRunning(false);
+    const nid = "t" + (++workspace.seq);
+    workspace.tabs.push({ id: nid, name: nextUntitledName() });
+    workspace.activeId = null; // the old active tab is gone; don't re-save it
+    loadIntoEditor(nid);
+    saveActiveBuild();
+  } else if (id === workspace.activeId) {
+    // Closing the active tab: fall to its neighbour.
+    if (running) setRunning(false);
+    const next = workspace.tabs[Math.min(idx, workspace.tabs.length - 1)];
+    workspace.activeId = null;
+    loadIntoEditor(next.id);
+  }
+  saveWorkspaceIndex();
+  renderTabs();
+}
+
+function renameTab(id, name) {
+  const tab = findTab(id);
+  if (!tab) return;
+  name = String(name || "").trim().slice(0, MAX_TAB_NAME);
+  if (!name) return; // ignore empty names, keep the old one
+  tab.name = name;
+  saveWorkspaceIndex();
+  renderTabs();
+}
+
+// Swap a tab's label for an inline text field; commit on Enter/blur, cancel on
+// Esc. Keydowns are kept local so global shortcuts (Delete, Ctrl+C) don't fire.
+function beginRename(tab, tabEl, nameEl) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "tab-rename";
+  input.maxLength = MAX_TAB_NAME;
+  input.value = tab.name;
+  input.spellcheck = false;
+  let done = false;
+  const commit = (save) => {
+    if (done) return;
+    done = true;
+    if (save) renameTab(tab.id, input.value);
+    else renderTabs();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); commit(true); }
+    else if (e.key === "Escape") { e.preventDefault(); commit(false); }
+  });
+  input.addEventListener("blur", () => commit(true));
+  input.addEventListener("mousedown", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
+  tabEl.replaceChild(input, nameEl);
+  input.focus();
+  input.select();
+}
+
+function renderTabs() {
+  tabListEl.innerHTML = "";
+  for (const tab of workspace.tabs) {
+    const el = document.createElement("div");
+    el.className = "tab" + (tab.id === workspace.activeId ? " active" : "");
+    el.title = tab.name + " — double-click to rename";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "tab-name";
+    nameEl.textContent = tab.name;
+    el.appendChild(nameEl);
+
+    const close = document.createElement("button");
+    close.className = "tab-close";
+    close.textContent = "×";
+    close.title = "Close tab";
+    close.addEventListener("mousedown", (e) => { e.stopPropagation(); });
+    close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(tab.id); });
+    el.appendChild(close);
+
+    el.addEventListener("mousedown", () => switchTo(tab.id));
+    el.addEventListener("dblclick", () => beginRename(tab, el, el.querySelector(".tab-name")));
+    tabListEl.appendChild(el);
+  }
+}
+
+document.getElementById("btn-new-tab").addEventListener("click", newTab);
+
+// Pan/zoom don't trigger onChange, so capture the final view on the way out.
+window.addEventListener("beforeunload", saveActiveBuild);
+
+// Restore the workspace, migrating a pre-tabs single build if present.
+(function initWorkspace() {
+  let idx = null;
+  try {
+    const raw = localStorage.getItem(WS_INDEX_KEY);
+    if (raw) idx = JSON.parse(raw);
+  } catch (_) {}
+
+  if (idx && Array.isArray(idx.tabs) && idx.tabs.length) {
+    workspace.seq = Number(idx.seq) || 0;
+    workspace.tabs = idx.tabs
+      .filter((t) => t && typeof t.id === "string")
+      .map((t) => ({ id: t.id, name: String(t.name || "Untitled").slice(0, MAX_TAB_NAME) }));
+    const active = workspace.tabs.find((t) => t.id === idx.activeId) || workspace.tabs[0];
+    loadIntoEditor(active.id);
+    saveWorkspaceIndex();
+    renderTabs();
+    return;
+  }
+
+  // First run with the tab system. Migrate a legacy single build into tab #1.
+  workspace.seq = 1;
+  const id = "t1";
+  workspace.tabs = [{ id, name: "Untitled 1" }];
+  let migrated = false;
+  try {
+    const legacy = localStorage.getItem(LEGACY_BUILD_KEY);
+    if (legacy) {
+      const data = JSON.parse(legacy);
+      if (data && Array.isArray(data.blocks) && data.blocks.length) {
+        localStorage.setItem(buildKey(id), legacy);
+        workspace.tabs[0].name = "My build";
+        migrated = true;
+      }
     }
   } catch (_) {}
+  loadIntoEditor(id);
+  saveActiveBuild();
+  saveWorkspaceIndex();
+  if (migrated) { try { localStorage.removeItem(LEGACY_BUILD_KEY); } catch (_) {} }
+  renderTabs();
 })();
 
 // ---------------- help ----------------
@@ -298,8 +525,15 @@ document.getElementById("btn-help").addEventListener("click", () => {
       <li>Relay Gates output <b>nothing</b> (not 0) when the selected data port is unwired.</li>
       <li>Wireless Transceivers share a channel; delivery is delayed by the on-canvas distance between them (0.25 studs per px, signals travel 400 studs/s).</li>
     </ul>
+    <h3>Tabs</h3>
+    <ul>
+      <li>Each tab is a separate build. Click <b>+ New</b> to open a blank one; click a tab to switch to it.</li>
+      <li><b>Double-click a tab</b> to rename it (Enter to confirm, Esc to cancel). The <b>×</b> closes it (you're asked first if it isn't empty).</li>
+      <li>Every tab autosaves to this browser — its blocks, wires, and even its pan/zoom are restored when you come back. Import, Export and Clear act on the current tab.</li>
+      <li>Copy in one tab and paste in another: the clipboard is shared across tabs.</li>
+    </ul>
     <h3>Import / Export</h3>
-    <p>Export produces a JSON build you can save or share; Import loads it back. Your build also autosaves to this browser.</p>`;
+    <p>Export produces a JSON build you can save or share; Import loads it into the current tab. Every tab also autosaves to this browser.</p>`;
   openModal("Help", div, []);
 });
 
