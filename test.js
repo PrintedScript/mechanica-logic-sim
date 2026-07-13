@@ -4,6 +4,9 @@ const vm = require("vm");
 vm.runInThisContext(fs.readFileSync("src/blocks.js", "utf8"), { filename: "blocks.js" });
 vm.runInThisContext(fs.readFileSync("src/engine.js", "utf8"), { filename: "engine.js" });
 vm.runInThisContext(fs.readFileSync("src/route.js", "utf8"), { filename: "route.js" });
+// clipboard.js is a plain module (buildClip / remapClip / SimClipboard); its
+// pure helpers are exercised directly here.
+const { buildClip, remapClip, isClip } = require("./src/clipboard.js");
 // editor.js only touches the DOM when an Editor is constructed; loading it
 // headless gives access to the pure wire-geometry helpers.
 vm.runInThisContext(fs.readFileSync("src/editor.js", "utf8"), { filename: "editor.js" });
@@ -504,6 +507,68 @@ function polylineHitsRect(poly, rect) {
   const m = back.blocks[0].wires["Input"];
   check("wire meta: colour round-trips", m.color === "#ff5d5d");
   check("wire meta: corners round-trip", m.points.length === 2 && m.points[1].y === 160);
+}
+
+// ---------- multi-block clipboard (clipboard.js) ----------
+
+// 28. buildClip keeps wires between copied blocks and drops wires to blocks
+// left behind; wire cosmetics follow the surviving wires only.
+{
+  const m = mkModel([
+    { uid: 1, type: 82, x: 0, y: 0, props: { value: 5 } },                          // outside the copy
+    { uid: 2, type: 83, x: 40, y: 0, inputs: { "Input 1": 1, "Input 2": 3 } },       // In1 external, In2 internal
+    { uid: 3, type: 82, x: 40, y: 60, props: { value: 2 } },                         // inside the copy
+  ]);
+  // Colour/corners on both an internal wire (Input 2) and an external one (Input 1).
+  m.blocks.get(2).wires = {
+    "Input 1": { color: "#ff5d5d", points: [{ x: 10, y: 10 }] },
+    "Input 2": { color: "#3ecf6f", points: [{ x: 20, y: 20 }] },
+  };
+  const clip = buildClip(m, [2, 3]);
+  check("clip: is a valid clip", isClip(clip) && clip.blocks.length === 2);
+  const b2 = clip.blocks.find((b) => b.uid === 2);
+  check("clip: internal wire reference kept", b2.inputs["Input 2"] === 3);
+  check("clip: external wire reference dropped", b2.inputs["Input 1"] === null);
+  check("clip: cosmetics kept for internal wire", b2.wires && b2.wires["Input 2"] && b2.wires["Input 2"].color === "#3ecf6f");
+  check("clip: cosmetics dropped for severed wire", !(b2.wires && b2.wires["Input 1"]));
+  check("clip: only selected blocks copied", !clip.blocks.some((b) => b.uid === 1));
+}
+
+// 29. remapClip assigns fresh uids, rewires internal references to them,
+// offsets positions and corners, and nulls references to blocks not in the clip.
+{
+  const clip = {
+    format: "mechanica-sim-clip", version: 1,
+    blocks: [
+      { uid: 2, type: 83, x: 40, y: 0, props: {}, inputs: { "Input 1": null, "Input 2": 3, "Input 3": 99 },
+        wires: { "Input 2": { color: "#3ecf6f", points: [{ x: 20, y: 20 }] } } },
+      { uid: 3, type: 82, x: 40, y: 60, props: { value: 2 }, inputs: {} },
+    ],
+  };
+  let next = 100;
+  const out = remapClip(clip, () => next++, 48, 24);
+  check("remap: fresh uids allocated in order", out.newUids.length === 2 && out.newUids[0] === 100 && out.newUids[1] === 101);
+  const nb2 = out.blocks.find((b) => b.uid === 100);
+  const nb3 = out.blocks.find((b) => b.uid === 101);
+  check("remap: internal reference rewired to new uid", nb2.inputs["Input 2"] === nb3.uid);
+  check("remap: reference to a block outside the clip nulled", nb2.inputs["Input 3"] === null);
+  check("remap: positions offset", nb2.x === 88 && nb2.y === 24 && nb3.y === 84);
+  check("remap: wire corners offset", nb2.wires["Input 2"].points[0].x === 68 && nb2.wires["Input 2"].points[0].y === 44);
+  check("remap: idMap maps old->new", out.idMap.get(2) === 100 && out.idMap.get(3) === 101);
+}
+
+// 30. A self-loop (block feeding its own input) is preserved and rewired to the
+// block's new uid on paste.
+{
+  const m = mkModel([
+    { uid: 7, type: 37, x: 0, y: 0, inputs: { "Input 1": 7, "Input 2": 7 } },
+  ]);
+  const clip = buildClip(m, [7]);
+  check("clip: self-loop reference kept", clip.blocks[0].inputs["Input 1"] === 7);
+  let next = 50;
+  const out = remapClip(clip, () => next++, 0, 0);
+  check("remap: self-loop points at the new uid", out.blocks[0].inputs["Input 1"] === out.blocks[0].uid);
+  check("remap: self-loop both ports rewired", out.blocks[0].inputs["Input 2"] === out.blocks[0].uid);
 }
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nAll tests passed.");

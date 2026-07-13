@@ -95,6 +95,27 @@ editor.getEngine = () => engine;
 
 // ---------------- keyboard ----------------
 
+// Copy the current selection into the shared clipboard and restart the paste
+// cascade so the next paste lands just off the originals.
+function copySelectionToClipboard() {
+  const clip = editor.copySelection();
+  if (!clip) return false;
+  SimClipboard.set(clip, Date.now());
+  editor.pasteOffsetStep = 0;
+  return true;
+}
+
+// Paste the shared clipboard, cascading each successive paste by two grid cells
+// so repeated pastes fan out instead of stacking exactly on top of each other.
+function pasteFromClipboard() {
+  const clip = SimClipboard.get();
+  if (!clip) return false;
+  editor.pasteOffsetStep += 1;
+  const off = editor.pasteOffsetStep * GRID_SIZE * 2;
+  const n = editor.pasteClip(clip, off, off);
+  return n > 0;
+}
+
 window.addEventListener("keydown", (e) => {
   const tag = document.activeElement ? document.activeElement.tagName : "";
   const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
@@ -103,7 +124,16 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     return;
   }
-  if (running && engine && !typing && !e.repeat && modalBg.classList.contains("hidden")) {
+  // Selection / clipboard shortcuts (not while typing or in a modal).
+  const modalOpen = !modalBg.classList.contains("hidden");
+  if ((e.ctrlKey || e.metaKey) && !typing && !modalOpen) {
+    const k = e.key.toLowerCase();
+    if (k === "a") { editor.selectAll(); e.preventDefault(); return; }
+    if (k === "c") { copySelectionToClipboard(); e.preventDefault(); return; }
+    if (k === "x") { if (copySelectionToClipboard()) editor.deleteSelection(); e.preventDefault(); return; }
+    if (k === "v") { pasteFromClipboard(); e.preventDefault(); return; }
+  }
+  if (running && engine && !typing && !e.repeat && !modalOpen && !e.ctrlKey && !e.metaKey) {
     engine.keyDown(e.key.toUpperCase());
   }
 });
@@ -246,11 +276,14 @@ document.getElementById("btn-help").addEventListener("click", () => {
     <ul>
       <li>Click a palette entry to add a block. Drag its header to move it.</li>
       <li>Drag from a green output dot to an input dot to wire blocks (dragging a wired input dot grabs that wire).</li>
+      <li><b>Selecting many:</b> drag across empty canvas to rubber-band select every block the box touches. <b>Shift+click</b> a block toggles it in/out of the selection, and <b>Shift+drag</b> adds a marquee to the current selection. <b>Ctrl/⌘+A</b> selects everything.</li>
+      <li><b>Moving a group:</b> drag any selected block and the whole selection moves together, keeping each block's spacing. Wires that run between two selected blocks keep their bent corners in the same place relative to the blocks.</li>
+      <li><b>Copy &amp; paste:</b> <b>Ctrl/⌘+C</b> copies the selected blocks, <b>Ctrl/⌘+V</b> pastes them (offset a little so they don't cover the originals; paste again to fan out more), and <b>Ctrl/⌘+X</b> cuts. Wires between copied blocks are kept; wires to blocks that weren't copied are dropped. The clipboard is shared, so you can paste the same selection again later.</li>
       <li><b>Wire corners:</b> drag anywhere on a wire to bend a new corner into it. With the wire selected, drag a corner dot to move it, double-click a dot to remove it, or use "Straighten" in the Inspector.</li>
       <li><b>Wire colours:</b> select a wire and pick a colour in the Inspector (presets or a custom colour). Coloured wires glow in their own colour when carrying a True value. Colours and corners are saved with the build.</li>
       <li><b>⌗ Tidy wires</b> auto-routes every wire at right angles, steering around blocks and keeping wires from riding on top of each other. It replaces existing corners (colours are kept) — you can still adjust any wire by hand afterwards.</li>
       <li><b>▦ Snap</b> toggles snap-to-grid: newly added blocks, dragged blocks and wire corners align to the ${GRID_SIZE}px dot grid, and ⌗ Tidy wires routes its corners on the grid too. Existing positions are untouched until you drag them. The setting is remembered in this browser.</li>
-      <li>Click a block or wire, then press <b>Delete</b> to remove it. Drag empty space to pan, scroll to zoom.</li>
+      <li>Click a block or wire, then press <b>Delete</b> to remove it (Delete clears the whole selection at once). <b>Middle-drag</b> or hold <b>Space</b> and drag to pan; scroll to zoom.</li>
       <li><b>Note</b> blocks (marked "sim") are simulator-only sticky notes for documenting your build — select one and edit its text in the Inspector. They are ignored by the simulation.</li>
       <li>A selected wire animates in the direction the data travels (source → destination).</li>
       <li>Number properties snap to steps of <b>0.005</b> like in the game — typing 1.023 stores 1.025.</li>

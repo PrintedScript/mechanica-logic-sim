@@ -105,6 +105,16 @@ button#btn-snap.on { background: #14532d; border-color: #16a34a; }
   position: absolute; bottom: 8px; left: 10px; color: var(--muted);
   font-size: 11px; pointer-events: none;
 }
+/* Rubber-band marquee for multi-select. */
+.marquee {
+  position: absolute; z-index: 5; pointer-events: none;
+  border: 1px solid var(--accent);
+  background: rgba(77, 163, 255, 0.12);
+  border-radius: 2px;
+}
+/* Pan-gesture cursors: grab while Space is held, grabbing during a pan drag. */
+#canvas-wrap.space-pan { cursor: grab; }
+#canvas-wrap.panning { cursor: grabbing; }
 
 /* ---------- blocks ---------- */
 .block {
@@ -203,6 +213,7 @@ button#btn-snap.on { background: #14532d; border-color: #16a34a; }
 /* ---------- inspector ---------- */
 .insp-block-name { font-weight: 600; margin-bottom: 2px; }
 .insp-sub { color: var(--muted); font-size: 11px; margin-bottom: 10px; }
+.insp-pos { font-variant-numeric: tabular-nums; margin-top: -6px; }
 .insp-field { margin-bottom: 10px; }
 .insp-field label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
 .insp-field input[type=number], .insp-field input[type=text], .insp-field select, .insp-field textarea {

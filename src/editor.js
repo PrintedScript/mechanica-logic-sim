@@ -17,7 +17,13 @@ class Editor {
     this.pan = { x: 60, y: 40 };
     this.zoom = 1;
     this.snap = true;           // snap blocks and wire corners to GRID_SIZE
-    this.selected = null;        // { kind: "block", uid } | { kind: "wire", uid, port }
+    // Selection is a set of block uids OR a single wire (the two are mutually
+    // exclusive). Multiple blocks can be selected at once for group move /
+    // copy; wires are still selected one at a time for the corner/colour tools.
+    this.selectedBlocks = new Set(); // uids of selected blocks
+    this.selectedWire = null;        // { uid, port } | null
+    this.spaceDown = false;          // hold Space to pan with a left-drag
+    this.pasteOffsetStep = 0;        // cascades repeated pastes so they don't stack
     this.dragWire = null;
     this.onChange = null;        // (structural: bool, changedUids: number[]) => void
     this.onPropEdit = null;      // (uid) => void
@@ -67,6 +73,18 @@ class Editor {
   }
 
   deleteBlock(uid) {
+    const changed = this._removeBlock(uid);
+    this.selectedBlocks.delete(uid);
+    if (this.selectedWire && this.selectedWire.uid === uid) this.selectedWire = null;
+    this.renderWires();
+    this.renderInspector();
+    this.emitChange(true, changed);
+  }
+
+  // Remove one block and sever any wires pointing at it; returns the uids whose
+  // inputs changed (including `uid`). Does not touch selection, re-render wires,
+  // or emit — callers batch those so a multi-block delete is a single pass.
+  _removeBlock(uid) {
     const changed = [uid];
     this.model.blocks.delete(uid);
     for (const b of this.model.blocks.values()) {
@@ -80,9 +98,7 @@ class Editor {
     }
     const el = this.blockEls.get(uid);
     if (el) { el.root.remove(); this.blockEls.delete(uid); }
-    if (this.selected && this.selected.uid === uid) this.select(null);
-    this.renderWires();
-    this.emitChange(true, changed);
+    return changed;
   }
 
   connect(srcUid, dstUid, port) {
@@ -178,7 +194,7 @@ class Editor {
     this.nextUid = 1;
     this.layer.innerHTML = "";
     this.blockEls.clear();
-    this.select(null);
+    this.clearSelection();
     this.renderWires();
     this.emitChange(true, []);
   }
@@ -272,9 +288,76 @@ class Editor {
     }
     this.model.blocks = blocks;
     this.nextUid = maxUid + 1;
-    this.select(null);
+    this.clearSelection();
     this.renderAll();
     this.emitChange(true, [...blocks.keys()]);
+  }
+
+  // ---------------- clipboard ----------------
+
+  // Snapshot the current block selection as a portable clip (wires between
+  // selected blocks are kept; wires to unselected blocks are dropped). Returns
+  // null if nothing is selected. The caller stores it in the shared clipboard.
+  copySelection() {
+    if (!this.selectedBlocks.size) return null;
+    return buildClip(this.model, this.selectedBlocks);
+  }
+
+  // Paste a clip into this editor. Every block gets a fresh uid, positions and
+  // wire corners are offset by (dx, dy), unknown block types are dropped (so a
+  // clip from a newer editor still pastes what it can), numbers are re-clamped,
+  // and inputs are rebuilt against the current schema — the same hardening
+  // load() applies. The pasted blocks become the new selection. Returns the
+  // number of blocks pasted.
+  pasteClip(clip, dx = 0, dy = 0) {
+    if (!isClip(clip)) return 0;
+    const remapped = remapClip(clip, () => this.nextUid++, dx, dy);
+    // uids we're actually keeping (known types); refs to dropped blocks -> null.
+    const valid = new Set();
+    for (const b of remapped.blocks) if (BLOCK_TYPES[b.type]) valid.add(b.uid);
+    const added = [];
+    for (const b of remapped.blocks) {
+      if (!BLOCK_TYPES[b.type]) continue;
+      const blk = {
+        uid: b.uid,
+        type: b.type,
+        name: (b.name || "").slice(0, MAX_NAME_LEN),
+        x: b.x, y: b.y,
+        props: { ...defaultProps(b.type), ...(b.props || {}) },
+        inputs: {},
+      };
+      for (const p of BLOCK_TYPES[b.type].props) {
+        if (p.type === "number" || p.type === "range") {
+          blk.props[p.key] = Math.min(p.max, Math.max(p.min, snapNumber(blk.props[p.key])));
+        }
+      }
+      for (const port of blockInputs(blk)) {
+        const src = b.inputs ? b.inputs[port] : null;
+        blk.inputs[port] = (src != null && valid.has(src)) ? src : null;
+      }
+      if (b.wires) {
+        for (const port of blockInputs(blk)) {
+          const m = b.wires[port];
+          if (!m || blk.inputs[port] == null) continue;
+          const color = (typeof m.color === "string" && /^#[0-9a-f]{6}$/i.test(m.color)) ? m.color : null;
+          const points = (Array.isArray(m.points) ? m.points : [])
+            .slice(0, MAX_WIRE_POINTS)
+            .map((pt) => ({ x: Number(pt && pt.x) || 0, y: Number(pt && pt.y) || 0 }));
+          if (color || points.length) {
+            if (!blk.wires) blk.wires = {};
+            blk.wires[port] = { color, points };
+          }
+        }
+      }
+      this.model.blocks.set(blk.uid, blk);
+      this.renderBlock(blk.uid);
+      added.push(blk.uid);
+    }
+    if (!added.length) return 0;
+    this.renderWires();
+    this.setBlockSelection(added);
+    this.emitChange(true, added);
+    return added.length;
   }
 
   // ---------------- geometry ----------------
@@ -450,9 +533,7 @@ class Editor {
 
     this.layer.appendChild(root);
     this.blockEls.set(uid, { root, valueEl, extraEl, portEls, inValEls });
-    if (this.selected && this.selected.kind === "block" && this.selected.uid === uid) {
-      root.classList.add("selected");
-    }
+    if (this.selectedBlocks.has(uid)) root.classList.add("selected");
     this.bindBlockEvents(root, blk);
   }
 
@@ -478,8 +559,8 @@ class Editor {
         this.svg.appendChild(vis);
         this.svg.appendChild(hit);
         this.wireEls.push({ dst: blk.uid, port, src, visible: vis, hit });
-        if (this.selected && this.selected.kind === "wire" &&
-            this.selected.uid === blk.uid && this.selected.port === port) {
+        if (this.selectedWire &&
+            this.selectedWire.uid === blk.uid && this.selectedWire.port === port) {
           vis.classList.add("selected");
         }
       }
@@ -490,16 +571,16 @@ class Editor {
   // Corner dots of the selected wire, draggable; double-click removes one.
   renderHandles() {
     if (this.handleGroup) { this.handleGroup.remove(); this.handleGroup = null; }
-    if (!this.selected || this.selected.kind !== "wire") return;
-    const blk = this.model.blocks.get(this.selected.uid);
-    if (!blk || blk.inputs[this.selected.port] == null) return;
-    const meta = this.wireMeta(blk, this.selected.port);
+    if (!this.selectedWire) return;
+    const blk = this.model.blocks.get(this.selectedWire.uid);
+    if (!blk || blk.inputs[this.selectedWire.port] == null) return;
+    const meta = this.wireMeta(blk, this.selectedWire.port);
     if (!meta || !meta.points.length) return;
     const g = mkSvg("g", { class: "wire-handles" });
     meta.points.forEach((p, i) => {
       const c = mkSvg("circle", { class: "wire-handle", cx: p.x, cy: p.y, r: 5 });
-      c.dataset.dst = this.selected.uid;
-      c.dataset.port = this.selected.port;
+      c.dataset.dst = this.selectedWire.uid;
+      c.dataset.port = this.selectedWire.port;
       c.dataset.index = i;
       g.appendChild(c);
     });
@@ -536,54 +617,122 @@ class Editor {
 
   // ---------------- selection ----------------
 
+  // Backward-compatible entry point. `sel` is null (clear), { kind:"block", uid }
+  // or { kind:"wire", uid, port }. Block selection here replaces the whole set;
+  // multi-select goes through the dedicated helpers below.
   select(sel) {
-    if (this.selected && this.selected.kind === "block") {
-      const el = this.blockEls.get(this.selected.uid);
-      if (el) el.root.classList.remove("selected");
-    }
-    if (this.selected && this.selected.kind === "wire") {
-      for (const w of this.wireEls) w.visible.classList.remove("selected");
-    }
-    this.selected = sel;
-    if (sel && sel.kind === "block") {
-      const el = this.blockEls.get(sel.uid);
-      if (el) el.root.classList.add("selected");
-    }
-    if (sel && sel.kind === "wire") {
-      for (const w of this.wireEls) {
-        if (w.dst === sel.uid && w.port === sel.port) w.visible.classList.add("selected");
-      }
-    }
-    this.renderHandles();
+    if (!sel) { this.clearSelection(); return; }
+    if (sel.kind === "wire") this.selectWire(sel.uid, sel.port);
+    else this.setBlockSelection([sel.uid]);
+  }
+
+  clearSelection() {
+    this.selectedBlocks.clear();
+    this.selectedWire = null;
+    this.refreshSelectionVisuals();
     this.renderInspector();
   }
 
-  deleteSelection() {
-    if (!this.selected) return;
-    if (this.selected.kind === "block") this.deleteBlock(this.selected.uid);
-    else if (this.selected.kind === "wire") {
-      this.disconnect(this.selected.uid, this.selected.port);
-      this.select(null);
+  // Replace the block selection with exactly `uids` (clears any wire selection).
+  setBlockSelection(uids) {
+    this.selectedBlocks = new Set([...uids].filter((u) => this.model.blocks.has(u)));
+    this.selectedWire = null;
+    this.refreshSelectionVisuals();
+    this.renderInspector();
+  }
+
+  // Add `uids` to the current block selection (used by Shift+marquee).
+  addBlocksToSelection(uids) {
+    this.selectedWire = null;
+    for (const u of uids) if (this.model.blocks.has(u)) this.selectedBlocks.add(u);
+    this.refreshSelectionVisuals();
+    this.renderInspector();
+  }
+
+  // Toggle a single block in/out of the selection (Shift/Ctrl+click).
+  toggleBlockSelection(uid) {
+    if (!this.model.blocks.has(uid)) return;
+    this.selectedWire = null;
+    if (this.selectedBlocks.has(uid)) this.selectedBlocks.delete(uid);
+    else this.selectedBlocks.add(uid);
+    this.refreshSelectionVisuals();
+    this.renderInspector();
+  }
+
+  selectWire(uid, port) {
+    this.selectedBlocks.clear();
+    this.selectedWire = { uid, port };
+    this.refreshSelectionVisuals();
+    this.renderInspector();
+  }
+
+  selectAll() {
+    this.setBlockSelection([...this.model.blocks.keys()]);
+  }
+
+  isBlockSelected(uid) { return this.selectedBlocks.has(uid); }
+
+  // Reconcile every block's/wire's "selected" class with the current sets,
+  // without rebuilding the DOM (cheap enough to call on every selection change).
+  refreshSelectionVisuals() {
+    for (const [uid, el] of this.blockEls) {
+      el.root.classList.toggle("selected", this.selectedBlocks.has(uid));
     }
+    for (const w of this.wireEls) {
+      const on = this.selectedWire && w.dst === this.selectedWire.uid && w.port === this.selectedWire.port;
+      w.visible.classList.toggle("selected", !!on);
+    }
+    this.renderHandles();
+  }
+
+  deleteSelection() {
+    if (this.selectedWire) {
+      this.disconnect(this.selectedWire.uid, this.selectedWire.port);
+      this.selectedWire = null;
+      this.renderInspector();
+      return;
+    }
+    if (!this.selectedBlocks.size) return;
+    // Batch: remove every selected block in one pass, then a single re-render
+    // and change event (so the engine restructures once, not once per block).
+    const uids = [...this.selectedBlocks];
+    this.selectedBlocks.clear();
+    const changed = new Set();
+    for (const uid of uids) for (const c of this._removeBlock(uid)) changed.add(c);
+    this.renderWires();
+    this.renderInspector();
+    this.emitChange(true, [...changed]);
   }
 
   // ---------------- events ----------------
 
   bindCanvasEvents() {
-    // Pan + deselect on empty space.
+    // Empty-canvas mousedown. Middle button or Space+left pans; a plain left
+    // drag rubber-band selects (Shift adds to the current selection).
     this.wrap.addEventListener("mousedown", (e) => {
       if (e.target !== this.wrap && e.target !== this.svg && e.target !== this.world && e.target !== this.layer) return;
-      this.select(null);
-      const start = { x: e.clientX, y: e.clientY, px: this.pan.x, py: this.pan.y };
-      const move = (ev) => {
-        this.pan.x = start.px + (ev.clientX - start.x);
-        this.pan.y = start.py + (ev.clientY - start.y);
-        this.applyTransform();
-      };
-      const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
+      if (this.isPanGesture(e)) { e.preventDefault(); this.startPan(e); return; }
+      if (e.button !== 0) return;
+      // Left-drag on empty space: marquee select. A plain click (no drag)
+      // clears the selection; Shift keeps what's already selected.
+      this.startMarquee(e);
     });
+
+    // Space toggles the pan gesture; track it so a left-drag pans instead of
+    // marquee-selecting while held. Ignore repeats and typing.
+    window.addEventListener("keydown", (e) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const tag = document.activeElement ? document.activeElement.tagName : "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      this.spaceDown = true;
+      this.wrap.classList.add("space-pan");
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.code !== "Space") return;
+      this.spaceDown = false;
+      this.wrap.classList.remove("space-pan");
+    });
+    window.addEventListener("blur", () => { this.spaceDown = false; this.wrap.classList.remove("space-pan"); });
 
     // Zoom to cursor.
     this.wrap.addEventListener("wheel", (e) => {
@@ -596,9 +745,13 @@ class Editor {
       this.applyTransform();
     }, { passive: false });
 
+    // Middle-mouse should pan from anywhere on the canvas, even over a block.
+    this.wrap.addEventListener("auxclick", (e) => { if (e.button === 1) e.preventDefault(); });
+
     // Wires: drag a corner handle to move it, drag the wire itself to bend a
     // new corner into it, plain click to select.
     this.svg.addEventListener("mousedown", (e) => {
+      if (this.isPanGesture(e)) { e.preventDefault(); e.stopPropagation(); this.startPan(e); return; }
       const handle = e.target.closest ? e.target.closest("circle.wire-handle") : null;
       if (handle) {
         e.preventDefault();
@@ -610,7 +763,7 @@ class Editor {
       if (p) {
         e.stopPropagation();
         const uid = Number(p.dataset.dst), port = p.dataset.port;
-        this.select({ kind: "wire", uid, port });
+        this.selectWire(uid, port);
         this.bendWireDrag(uid, port, e);
       }
     });
@@ -628,6 +781,88 @@ class Editor {
       this.renderWires();
       this.emitChange(false, [blk.uid]);
     });
+  }
+
+  // Middle button, or Space held with the left button: a pan, not a select.
+  isPanGesture(e) {
+    return e.button === 1 || (e.button === 0 && this.spaceDown);
+  }
+
+  startPan(e) {
+    const start = { x: e.clientX, y: e.clientY, px: this.pan.x, py: this.pan.y };
+    this.wrap.classList.add("panning");
+    const move = (ev) => {
+      this.pan.x = start.px + (ev.clientX - start.x);
+      this.pan.y = start.py + (ev.clientY - start.y);
+      this.applyTransform();
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      this.wrap.classList.remove("panning");
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  // Rubber-band selection. A box drawn in screen space; on release, blocks whose
+  // world-space bounds intersect it are selected. Shift keeps the existing
+  // selection (adds to it); otherwise it replaces. A click with no drag clears.
+  startMarquee(e) {
+    const additive = e.shiftKey;
+    const origin = { x: e.clientX, y: e.clientY };
+    const box = document.createElement("div");
+    box.className = "marquee";
+    this.wrap.appendChild(box);
+    let moved = false;
+    const wrapRect = this.wrap.getBoundingClientRect();
+
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y) < 4) return;
+      moved = true;
+      const left = Math.min(origin.x, ev.clientX) - wrapRect.left;
+      const top = Math.min(origin.y, ev.clientY) - wrapRect.top;
+      const w = Math.abs(ev.clientX - origin.x);
+      const h = Math.abs(ev.clientY - origin.y);
+      box.style.left = left + "px";
+      box.style.top = top + "px";
+      box.style.width = w + "px";
+      box.style.height = h + "px";
+    };
+    const up = (ev) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      box.remove();
+      if (!moved) {
+        // Plain click on empty space: clear (or leave a Shift-click alone).
+        if (!additive) this.clearSelection();
+        return;
+      }
+      const a = this.screenToWorld(origin.x, origin.y);
+      const b = this.screenToWorld(ev.clientX, ev.clientY);
+      const rx0 = Math.min(a.x, b.x), rx1 = Math.max(a.x, b.x);
+      const ry0 = Math.min(a.y, b.y), ry1 = Math.max(a.y, b.y);
+      const hits = [];
+      for (const [uid, blk] of this.model.blocks) {
+        const bounds = this.blockBounds(blk);
+        if (bounds.x < rx1 && bounds.x + bounds.w > rx0 &&
+            bounds.y < ry1 && bounds.y + bounds.h > ry0) hits.push(uid);
+      }
+      if (additive) this.addBlocksToSelection(hits);
+      else this.setBlockSelection(hits);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  // World-space bounding box of a block, using the rendered element when
+  // available and falling back to the computed layout height otherwise.
+  blockBounds(blk) {
+    const els = this.blockEls.get(blk.uid);
+    const w = (els && els.root.offsetWidth) || BLOCK_W;
+    const h = (els && els.root.offsetHeight) ||
+              (this.headH(blk) + ROWS_PAD * 2 + (blockInputs(blk).length + 1) * ROW_H + 24);
+    return { x: blk.x, y: blk.y, w, h };
   }
 
   // Drag an existing corner of a wire.
@@ -688,32 +923,100 @@ class Editor {
   bindBlockEvents(root, blk) {
     const head = root.querySelector(".block-head");
     head.addEventListener("mousedown", (e) => {
+      if (this.isPanGesture(e)) { e.preventDefault(); this.startPan(e); return; }
+      if (e.button !== 0) return;
       e.preventDefault();
-      this.select({ kind: "block", uid: blk.uid });
-      const start = this.screenToWorld(e.clientX, e.clientY);
-      const orig = { x: blk.x, y: blk.y };
-      const move = (ev) => {
-        const cur = this.screenToWorld(ev.clientX, ev.clientY);
-        blk.x = this.snapPos(orig.x + cur.x - start.x);
-        blk.y = this.snapPos(orig.y + cur.y - start.y);
-        root.style.left = blk.x + "px";
-        root.style.top = blk.y + "px";
-        this.updateWiresFor(blk.uid);
-      };
-      const up = () => {
-        window.removeEventListener("mousemove", move);
-        window.removeEventListener("mouseup", up);
-        this.emitChange(false, [blk.uid]);
-      };
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
+      // Shift/Ctrl/⌘ toggles this block in the selection without dragging.
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        this.toggleBlockSelection(blk.uid);
+        return;
+      }
+      // Plain click on an unselected block selects just it. Clicking a block
+      // that's already part of a multi-selection keeps the whole group so it
+      // can be dragged together.
+      if (!this.selectedBlocks.has(blk.uid)) this.setBlockSelection([blk.uid]);
+      this.startBlockDrag(blk, e);
     });
 
     root.addEventListener("mousedown", (e) => {
+      if (this.isPanGesture(e)) return; // handled by wrap/startPan
       const dot = e.target.closest ? e.target.closest(".port") : null;
       if (dot) { e.preventDefault(); e.stopPropagation(); this.startWireDrag(dot); return; }
-      if (e.target.closest(".block")) this.select({ kind: "block", uid: blk.uid });
+      // Body click (not the head): select but don't drag, and respect modifiers.
+      if (e.target.closest(".block-head")) return; // head handler owns this
+      if (e.shiftKey || e.ctrlKey || e.metaKey) { this.toggleBlockSelection(blk.uid); return; }
+      if (!this.selectedBlocks.has(blk.uid)) this.setBlockSelection([blk.uid]);
     });
+  }
+
+  // Drag every selected block as one rigid group. One snapped delta (derived
+  // from the grabbed block) is applied to all selected blocks, so their spacing
+  // is preserved and the grabbed block lands on the grid. Corners of wires whose
+  // both endpoints are in the group (including self-loops) shift by the same
+  // delta, keeping those wires in the same position relative to their blocks.
+  startBlockDrag(anchor, e) {
+    const start = this.screenToWorld(e.clientX, e.clientY);
+    const set = new Set(this.selectedBlocks);
+    set.add(anchor.uid);
+    const anchorOrig = { x: anchor.x, y: anchor.y };
+    // Snapshot every moving block's origin.
+    const origs = new Map();
+    for (const uid of set) {
+      const b = this.model.blocks.get(uid);
+      if (b) origs.set(uid, { x: b.x, y: b.y });
+    }
+    // Snapshot the original corner points of internal wires (both ends moving).
+    const internalWires = [];
+    for (const uid of set) {
+      const b = this.model.blocks.get(uid);
+      if (!b) continue;
+      for (const port of blockInputs(b)) {
+        const src = b.inputs[port];
+        if (src != null && set.has(src)) {
+          const meta = this.wireMeta(b, port);
+          if (meta && meta.points.length) {
+            internalWires.push({ meta, orig: meta.points.map((p) => ({ x: p.x, y: p.y })) });
+          }
+        }
+      }
+    }
+    let moved = false;
+    const move = (ev) => {
+      const cur = this.screenToWorld(ev.clientX, ev.clientY);
+      const dx = this.snapPos(anchorOrig.x + cur.x - start.x) - anchorOrig.x;
+      const dy = this.snapPos(anchorOrig.y + cur.y - start.y) - anchorOrig.y;
+      if (!moved && dx === 0 && dy === 0) return;
+      moved = true;
+      for (const uid of set) {
+        const b = this.model.blocks.get(uid);
+        const o = origs.get(uid);
+        if (!b || !o) continue;
+        b.x = o.x + dx;
+        b.y = o.y + dy;
+        const el = this.blockEls.get(uid);
+        if (el) { el.root.style.left = b.x + "px"; el.root.style.top = b.y + "px"; }
+      }
+      // Shift internal wire corners so those wires ride along with the group.
+      for (const w of internalWires) {
+        for (let i = 0; i < w.orig.length; i++) {
+          w.meta.points[i].x = w.orig[i].x + dx;
+          w.meta.points[i].y = w.orig[i].y + dy;
+        }
+      }
+      for (const uid of set) this.updateWiresFor(uid);
+      // Keep the Inspector's position readout in step while dragging.
+      if (this.inspPosEl && set.has(this.inspPosEl.uid) && this.inspPosEl.el.isConnected) {
+        const b = this.model.blocks.get(this.inspPosEl.uid);
+        if (b) this.inspPosEl.el.textContent = `x ${Math.round(b.x)}, y ${Math.round(b.y)}`;
+      }
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      if (moved) this.emitChange(false, [...set]);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
   }
 
   startWireDrag(dot) {
@@ -811,9 +1114,9 @@ class Editor {
 
   renderInspector() {
     const body = this.inspBody;
-    if (!this.selected) { body.innerHTML = `<em class="muted">Nothing selected</em>`; return; }
-    if (this.selected.kind === "wire") {
-      const { uid, port } = this.selected;
+    this.inspPosEl = null; // stale after any rebuild; re-set for a single block below
+    if (this.selectedWire) {
+      const { uid, port } = this.selectedWire;
       const dst = this.model.blocks.get(uid);
       const src = dst ? this.model.blocks.get(dst.inputs[port]) : null;
       const meta = dst ? this.wireMeta(dst, port) : null;
@@ -880,8 +1183,33 @@ class Editor {
       body.appendChild(del);
       return;
     }
-    const blk = this.model.blocks.get(this.selected.uid);
-    if (!blk) { body.innerHTML = ""; return; }
+    if (this.selectedBlocks.size === 0) {
+      body.innerHTML = `<em class="muted">Nothing selected</em>`;
+      return;
+    }
+    // Multiple blocks: show a summary and group actions rather than one block's
+    // properties (the individual props would be ambiguous across the group).
+    if (this.selectedBlocks.size > 1) {
+      const n = this.selectedBlocks.size;
+      const counts = {};
+      for (const uid of this.selectedBlocks) {
+        const b = this.model.blocks.get(uid);
+        if (b) counts[b.type] = (counts[b.type] || 0) + 1;
+      }
+      const lines = Object.entries(counts)
+        .map(([t, c]) => `<div class="insp-sub">${c}× ${escapeHtml(BLOCK_TYPES[t].name)}</div>`)
+        .join("");
+      body.innerHTML = `<div class="insp-block-name">${n} blocks selected</div>${lines}
+        <div class="insp-sub" style="margin-top:8px">Drag any selected block to move them together. Ctrl/⌘+C to copy, Ctrl/⌘+V to paste.</div>`;
+      const del = document.createElement("button");
+      del.className = "danger insp-del";
+      del.textContent = `Delete ${n} blocks (Del)`;
+      del.onclick = () => this.deleteSelection();
+      body.appendChild(del);
+      return;
+    }
+    const blk = this.model.blocks.get([...this.selectedBlocks][0]);
+    if (!blk) { body.innerHTML = `<em class="muted">Nothing selected</em>`; return; }
     const def = BLOCK_TYPES[blk.type];
     const subText = (customName) =>
       `${customName ? def.name + " · " : ""}${def.virtual ? "simulator-only" : `type ${blk.type}`} · uid ${blk.uid} · ${def.cat}`;
@@ -890,6 +1218,14 @@ class Editor {
       <div class="insp-sub">${escapeHtml(subText(curName))}</div>`;
     const titleEl = body.querySelector(".insp-block-name");
     const subEl = body.querySelector(".insp-sub");
+
+    // Absolute canvas position, live-updated while the block is dragged.
+    const posEl = document.createElement("div");
+    posEl.className = "insp-sub insp-pos";
+    posEl.textContent = `x ${Math.round(blk.x)}, y ${Math.round(blk.y)}`;
+    body.appendChild(posEl);
+    // Remembered so a single-block drag can refresh it without a full rebuild.
+    this.inspPosEl = { uid: blk.uid, el: posEl };
 
     // Custom name: shown as the block's title, with the real name as subtitle.
     const nameField = document.createElement("div");
